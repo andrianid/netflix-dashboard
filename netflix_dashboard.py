@@ -47,7 +47,7 @@ tvshows = len(df[df['type'] == 'TV Show'])
 countries = df['country'].nunique()
 
 # ==================================
-# GAYA VISUALISASI KARTU CHART
+# CHART CARD STYLE
 # ==================================
 CHART_CARD_STYLE = {
     "border": "1px solid #EAEAEA",
@@ -57,18 +57,18 @@ CHART_CARD_STYLE = {
     "box-shadow": "0 2px 10px rgba(0,0,0,0.04)"
 }
 
-# ---------------------------------------------------------------
-# COLOR PALETTE (mengikuti poster)
-# ---------------------------------------------------------------
-RED        = "#E50914"   # Movie
+# ==================================
+# COLOR PALETTE
+# ==================================
+RED        = "#E50914"
 RED_DARK   = "#B0060F"
-BLACK      = "#221F1F"   # TV Show
+BLACK      = "#221F1F"
 GREY       = "#B3B3B3"
-PINK_BOX   = "#FBE0E0"   # kotak insight
+PINK_BOX   = "#FBE0E0"
 BG         = "#FFFFFF"
 PANEL_BG   = "#FAF4F4"
 TEXT_DARK  = "#141414"
-CARD_BORDER = "#E5DCDC"  # border tipis untuk semua card/panel
+CARD_BORDER = "#E5DCDC"
 
 CARD_PAD = 14
 
@@ -106,9 +106,6 @@ def caption_box(text, height=80):
     )
 
 def card(content, width, height):
-    """Bungkus panel dengan border tipis + padding seragam supaya semua
-    section terlihat seperti grid/card yang presisi. Padding bawah dibuat
-    sedikit lebih besar agar konten (terutama caption) tidak mepet ke tepi."""
     return column(
         content,
         width=width, height=height,
@@ -122,7 +119,7 @@ def card(content, width, height):
     )
 
 # ==================================
-# FILTER PANEL (STREAMLINED MINIMALIST)
+# FILTER PANEL
 # ==================================
 
 content_filter = Select(
@@ -215,7 +212,7 @@ growth_chart.legend.orientation = "horizontal"
 growth_chart.add_tools(HoverTool(tooltips=[("Year", "@year_added"), ("Movie", "@movie_count"), ("TV Show", "@tv_count")]))
 
 
-# Tambahkan Label Insight ke Growth Chart
+# Label Insight Growth Chart
 growth_insight_text = (
     "GROWTH ANALYSIS:\n"
     "• 2015: Rapid increase starts.\n"
@@ -241,29 +238,15 @@ growth_chart.xgrid.grid_line_color = None
 
 growth_chart.add_layout(growth_label)
 
-# =================================================================
-# 2. WHERE NETFLIX CONTENT COMES FROM (bubble map ala referensi)
-#    -> View di-crop ke kawasan negara top 5 (Amerika Utara, Eropa,
-#       India) supaya tidak banyak area laut/benua kosong.
-#    -> Posisi bubble & label diatur manual (CENTERS / LABEL_POS) +
-#       leader line tipis, supaya bubble yang berdekatan (US-Canada,
-#       UK-France) tidak saling tumpang tindih -- mengikuti gaya
-#       bubble map pada notebook PROGRAM (cell 5.2).
-#    -> Tools pan / wheel_zoom tetap aktif kalau user ingin zoom
-#       manual lebih lanjut, hanya VIEW AWALnya yang di-crop rapi.
-#    Ikut filter global: ukuran bubble & angka di dalamnya dihitung
-#    ulang sesuai subset data; posisi & nama negara tetap.
-# =================================================================
+# ==================================
+# WHERE NETFLIX CONTENT COMES FROM
+# ==================================
 def country_counts_for(subset):
-    # df sudah di-explode per country pada tahap preprocessing,
-    # jadi tinggal value_counts langsung (sama seperti notebook).
     return subset['country'].value_counts()
 
 TOP5_COUNTRIES_ALL = country_counts_for(df).head(5).index.tolist()
 
-# Posisi bubble (lon, lat) -- digeser sedikit dari koordinat geografis
-# asli (Canada ditarik ke atas US, UK & France direnggangkan) supaya
-# tidak saling tumpang tindih saat ukurannya membesar.
+# Posisi bubble (lon, lat)
 CENTERS = {
     "United States": (-98, 38),
     "Canada": (-98, 63),
@@ -271,8 +254,7 @@ CENTERS = {
     "France": (8, 48),
     "India": (80, 21),
 }
-# Posisi label nama negara (callout), dihubungkan garis tipis ke bubble
-# -- supaya nama yang berdekatan tidak numpuk, mengikuti referensi.
+# Posisi label nama negara
 LABEL_POS = {
     "United States": (-127, 10),
     "Canada": (-98, 73),
@@ -290,9 +272,6 @@ map_movie_vals = map_values(df[df['type'] == 'Movie'])
 map_tv_vals = map_values(df[df['type'] == 'TV Show'])
 
 def bubble_sizes(vals):
-    """Skala akar (sqrt), bukan liWHERE NETFLIX CONTENT COMES FROM
-near -- supaya selisih ukuran bubble
-    antar negara tidak terlalu ekstrem dan tidak mudah saling menutupi."""
     m = max(vals) if max(vals) > 0 else 1
     return [22 + (v / m) ** 0.5 * 48 for v in vals]
 
@@ -301,7 +280,7 @@ map_lats = [CENTERS[c][1] for c in TOP5_COUNTRIES_ALL]
 label_lons = [LABEL_POS[c][0] for c in TOP5_COUNTRIES_ALL]
 label_lats = [LABEL_POS[c][1] for c in TOP5_COUNTRIES_ALL]
 
-# ---- Load world boundaries (Natural Earth via geopandas) ----
+# Load world boundaries (Natural Earth via geopandas)
 def load_world():
     try:
         return gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
@@ -319,8 +298,7 @@ world = world[world[name_col] != 'Antarctica']
 world_geojson = json.dumps(json.loads(world.to_json()))
 geo_src = GeoJSONDataSource(geojson=world_geojson)
 
-# View AWAL di-crop ke kawasan top 5 negara (bukan world map penuh),
-# supaya tidak banyak ruang laut/benua kosong seperti referensi.
+# View di-crop ke kawasan top 5 negara
 country_map = figure(
             height=320,
             x_range=(-140, 110),
@@ -344,8 +322,7 @@ map_src = ColumnDataSource(data=dict(
     label=[f"{v:,}" for v in map_all_vals],
 ))
 
-# Ripple ring (efek "echo" transparan di sekitar bubble utama),
-# mengikuti gaya referensi -- ukurannya statis (tidak ikut filter).
+# Ripple ring
 for scale, alpha in [(2.2, 0.05), (1.6, 0.09)]:
     ring_src = ColumnDataSource(data=dict(
         lon=map_lons, lat=map_lats,
@@ -356,9 +333,7 @@ for scale, alpha in [(2.2, 0.05), (1.6, 0.09)]:
 
 
 
-# Garis penghubung tipis (leader line) dari bubble ke posisi label --
-# supaya nama negara yang berdekatan (UK & France, US yang besar)
-# tidak saling menumpuk dengan bubble atau dengan label lain.
+# Leader line
 for c in TOP5_COUNTRIES_ALL:
     cx, cy = CENTERS[c]
     lx, ly = LABEL_POS[c]
@@ -384,13 +359,12 @@ country_map.add_tools(HoverTool(renderers=[bubbles], attachment="right", tooltip
 ]))
 
 
-# Angka jumlah judul di dalam bubble -- terikat ColumnDataSource
-# supaya ikut ter-update saat filter Movie/TV Show diganti.
+# Angka jumlah judul di dalam bubble
 country_map.text('lon', 'lat', text='label', source=map_src, text_align="center",
         text_baseline="middle", text_color="white",
         text_font_size="10px", text_font_style="bold")
 
-# Nama negara di posisi label (callout), statis -- tidak ikut filter.
+# Nama negara di posisi label
 label_src = ColumnDataSource(data=dict(
     lon=label_lons, lat=label_lats, country=TOP5_COUNTRIES_ALL
 ))
@@ -624,7 +598,7 @@ header_banner = Div(text=f"""
     })
 
 # ==================================
-# NEW INSIGHT BOXES (GENRE & RATING) - CLEAN VERSION
+# INSIGHT BOXES (GENRE & RATING)
 # ==================================
 genre_insight = Div(
     text="""
@@ -653,7 +627,7 @@ rating_insight = Div(
 )
 
 # ==================================
-# DURATION INSIGHT BOX (ROW 2 KANAN)
+# DURATION INSIGHT BOX
 # ==================================
 duration_insight = Div(
     text="""
@@ -668,17 +642,9 @@ duration_insight = Div(
     """, sizing_mode="stretch_width"
 )
 
-# =================================================================
-# 7. CONTENT TYPE BY MAJOR MARKETS (donut charts) + HOVER
-#    Catatan: donut ini SECARA DEFINISI menunjukkan proporsi Movie vs TV Show,
-#    jadi tidak relevan untuk ikut difilter oleh dropdown Movie/TV Show
-#    (kalau difilter ke "Movie" misalnya, semua donut otomatis 100% Movie).
-#    Sesuai instruksi, efek filter "diperluas ke semua chart termasuk
-#    Growth & Duration" -- panel ini tetap menampilkan komposisi penuh
-#    sebagai konteks pembanding pasar, dan diberi catatan kecil di caption.
-# =================================================================
-# Ukuran figure donut dibuat sedikit lebih kecil dari lebar kolomnya (DONUT_W)
-# agar ada sedikit ruang visual, tapi tetap presisi di dalam grid 6 kolom.
+# ==================================
+# CONTENT TYPE BY MAJOR MARKETS
+# ==================================
 DONUT_FIG_W = 190
 DONUT_GAP = 15
 
@@ -886,7 +852,7 @@ callback = CustomJS(
     let selected = cb_obj.value;
     let mvals;
 
-    // Fungsi helper untuk template box minimalis (Tanpa Judul)
+    // Helper template box
     function getBox(icon, text) {
     return `<div style="background:#FCEAEA; border-radius:12px; padding:15px; width:100%; box-sizing:border-box; font-family:sans-serif;">
         <div style="display:flex; align-items:flex-start; gap:10px;">
@@ -1035,7 +1001,7 @@ callback = CustomJS(
     };
 
 
-    // Emit Perubahan
+    // Emit
     genre_insight.change.emit();
     rating_insight.change.emit();
     duration_insight.change.emit();
@@ -1075,7 +1041,7 @@ for chart in [growth_chart, country_map, genre_chart, rating_chart, duration_cha
 
 
 # ==================================
-# TEXT INSIGHT BOXES (ROW 1)
+# TEXT INSIGHT BOXES
 # ==================================
 growth_text_inline = Div(
     text=f"""
@@ -1132,10 +1098,10 @@ map_text_inline = Div(
 
 
 # ==================================
-# DASHBOARD GRID LAYOUT CONTEXT (PROPER FLEX SPLIT)
+# DASHBOARD GRID LAYOUT
 # ==================================
 
-# KARTU 1: Growth Chart (Diberi flex agar mendominasi ruang) + Boks Pink (Diberi lebar kaku lebih ramping)
+# Kartu 1: Growth Chart
 growth_card_combined = column(
 
     panel_title(
@@ -1150,7 +1116,7 @@ growth_card_combined = column(
     sizing_mode="stretch_both"
 )
 
-# KARTU 2: Country Map (Diberi flex agar mendominasi ruang) + Boks Pink (Diberi lebar kaku lebih ramping)
+# Kartu 2: Country Map
 country_map_card_combined = column(
 
     panel_title(
@@ -1173,13 +1139,13 @@ country_map_card_combined = column(
     sizing_mode="stretch_both"
 )
 
-# BARIS 1 UTAMA
+# Baris 1
 chart_row1 = row(growth_card_combined, country_map_card_combined, spacing=20, sizing_mode="stretch_width")
 
-# KARTU 3 (DURATION)
+# Kartu 3 (Duration)
 duration_card_combined = column(duration_chart, duration_insight, styles=CHART_CARD_STYLE, spacing=10, sizing_mode="stretch_width")
 
-# BARIS 2
+# Baris 2
 genre_card = column(
     panel_title(
         "TOP 10 GENRES",
@@ -1216,7 +1182,7 @@ duration_card = column(
     sizing_mode="stretch_width"
 )
 
-#baris 2 utama
+# Baris 2 utama
 chart_row2 = row(
     genre_card,
     rating_card,
@@ -1225,7 +1191,7 @@ chart_row2 = row(
     sizing_mode="stretch_width"
 )
 
-# BARIS 3 UTAMA
+# Baris 3 utama
 chart_row3 = row(
     panel7,
     spacing=20,
@@ -1243,15 +1209,8 @@ charts_layout = column(
 )
 
 # ==================================
-# SAKTI: BREAKPOINT JAVASCRIPT RESPONSIVE (ANTI-SHADOW DOM COMPONENT)
+# RESPONSIVE LAYOUT HANDLER (JAVASCRIPT)
 # ==================================
-
-# Karena CSS tidak sanggup menembus proteksi Shadow DOM komponen kaku milik Bokeh, 
-# kita gunakan window event listener resize via JavaScript murni. 
-# JS ini akan memantau lebar layar. Begitu di bawah 1024px (Inspect/HP):
-# 1. Boks pink otomatis di-HAPUS total tanpa jejak (display: none).
-# 2. Grid baris otomatis ditumpuk patah ke bawah murni (1 Baris = 1 Chart).
-# 3. Canvas grafik Bokeh secara pintar langsung melar 100% memenuhi sisa sela kartu.
 responsive_js_engine = Div(
     text="""
     <script>
@@ -1260,34 +1219,30 @@ responsive_js_engine = Div(
             let rows = document.querySelectorAll('.bk-Row');
             
             rows.forEach(row => {
-                // Cari Baris 1 Utama (Mendeteksi jika dia menampung dua kartu gabungan)
+                // Baris 1 utama (dua kartu chart)
                 if (row.children.length === 2 && row.querySelectorAll('canvas').length >= 2) {
                     if (width <= 1024) {
                         row.style.flexDirection = 'column';
                         row.style.height = 'auto';
                         
-                        // Eksekusi pemotongan layout internal kartu putih
                         let cards = row.children;
                         for(let card of cards) {
                             card.style.width = '100%';
                             card.style.height = 'auto';
                             card.style.flexDirection = 'column';
                             
-                            // Ambil boks pink di dalam kartu dan KILL total wujudnya
                             let pinkBox = card.querySelector('#growth-insight-container, #map-insight-container');
                             if(pinkBox) {
                                 pinkBox.parentElement.style.display = 'none';
                                 pinkBox.parentElement.style.width = '0px';
                             }
                             
-                            // Paksa canvas chart melar penuh 100% mengisi kekosongan
                             let chartDiv = card.children[0];
                             if(chartDiv) {
                                 chartDiv.style.width = '100%';
                             }
                         }
                     } else {
-                        // KEMBALIKAN KE KEJAYAAN MONITOR DEKTOP LO SEMULA (DEFAULT 100%)
                         row.style.flexDirection = 'row';
                         row.style.height = '370px';
                         
@@ -1306,7 +1261,7 @@ responsive_js_engine = Div(
                     }
                 }
                 
-                // Cari Baris 2 Utama (Meniadakan kekakuan 3 kolom berjejer di HP)
+                // Baris 2 utama (3 kolom)
                 if (row.children.length === 3 && row.querySelectorAll('canvas').length >= 2) {
                     if (width <= 1024) {
                         row.style.flexDirection = 'column';
@@ -1325,7 +1280,6 @@ responsive_js_engine = Div(
             });
         }
 
-        // Jalankan serentak saat dokumen dimuat dan setiap kali jendela diciutkan
         window.addEventListener('resize', applyResponsiveGrid);
         window.addEventListener('DOMContentLoaded', () => {
             setTimeout(applyResponsiveGrid, 200);
@@ -1350,10 +1304,9 @@ responsive_css_injector = Div(
     text="""
     <style>
         /* ==================================================
-           1. LAYAR LEBAR / DEFAULT (DESKTOP LAPTOP)
+           Desktop (>= 1025px)
            ================================================== */
         @media (min-width: 1025px) {
-            /* Grafik utama dipaksa agresif melar menghabiskan sisa sela kartu */
             .growth-flex-card > div:nth-child(1),
             .map-flex-card > div:nth-child(1) {
                 flex-grow: 1 !important;
@@ -1361,7 +1314,6 @@ responsive_css_injector = Div(
                 flex-basis: auto !important;
             }
             
-            /* Boks pink dipaksa mengecil kaku, ramping (160px), dan merapat manis di kanan kartu */
             #growth-insight-container, #map-insight-container {
                 width: 160px !important;
                 max-width: 160px !important;
@@ -1372,10 +1324,9 @@ responsive_css_injector = Div(
         }
 
         /* ==================================================
-           2. LAYAR KECIL / RESPONSIVE (INSPECT MODE < 1024px)
+           Responsive (< 1024px)
            ================================================== */
         @media (max-width: 1024px) {
-            /* 1. KUNCI MATI: Lenyapkan boks pink dari muka bumi beserta kontainer Bokeh-nya! */
             #growth-insight-container, 
             #map-insight-container,
             .growth-flex-card > div:nth-child(2),
@@ -1387,12 +1338,11 @@ responsive_css_injector = Div(
                 height: 0px !important;
                 max-width: 0px !important;
                 min-width: 0px !important;
-                flex: 0 0 0px !important; /* Hancurkan sisa ruang flex-basis Bokeh */
+                flex: 0 0 0px !important;
                 margin: 0 !important;
                 padding: 0 !important;
             }
             
-            /* 2. PAKSA grafik area dan peta melar murni 100% horizontal penuh tanpa celah bolong */
             .growth-flex-card > div:nth-child(1),
             .map-flex-card > div:nth-child(1),
             .growth-flex-card > .bk-Component,
@@ -1405,7 +1355,6 @@ responsive_css_injector = Div(
                 flex: 1 1 100% !important;
             }
 
-            /* 3. Paksa baris utama dasbor patah vertikal (1 Baris = 1 Kartu Grafik Penuh) */
             .main-dashboard-row-wrap, .bk-Row {
                 flex-direction: column !important;
                 align-items: stretch !important;
@@ -1425,8 +1374,6 @@ responsive_css_injector = Div(
     """,
     visible=False
 )
-print(type(title_us))
-
 # ==================================
 # ASSEMBLY DOCUMENT PACKAGING
 # ==================================
@@ -1436,7 +1383,7 @@ layout = column(
     charts_layout,
     favicon_injector,
     responsive_css_injector,
-    responsive_js_engine,  # <--- Injeksi kontroler JS pintar anti-omong kosong disini
+    responsive_js_engine,
     sizing_mode="stretch_width"
 )
 
@@ -1449,4 +1396,4 @@ output_file("netflix_dashboard.html")
 curdoc().theme = None
 save(layout)
 
-print("Dashboard created successfully with flawless native javascript responsiveness!")
+print("Dashboard created successfully")

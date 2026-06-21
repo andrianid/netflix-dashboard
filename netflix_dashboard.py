@@ -1,3 +1,6 @@
+# Desy Andriani - 203012420001
+# Andi Nailul Izzah Ramadhani - 203012420011
+
 import pandas as pd
 from bokeh.plotting import figure
 from bokeh.io import output_file, save, curdoc
@@ -564,7 +567,7 @@ header_banner = Div(text=f"""
                 CONTENT LANDSCAPE DASHBOARD
             </h2>
             <p style="color: #999999; margin: 4px 0 0 0; font-size: 13px;">
-                Advanced Data Visualization • Exploring Global Streaming Content
+                Desy Andriani (203012420001) & Andi Nailul Izzah Ramadhani (203012420011)
             </p>
         </div>
 

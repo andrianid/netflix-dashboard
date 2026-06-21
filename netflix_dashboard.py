@@ -162,7 +162,12 @@ filter_panel = row(
         "padding": "10px 25px",
         "background": "white",
         "box-shadow": "0 2px 6px rgba(0,0,0,0.03)",
-        "align-items": "center"
+        "align-items": "center",
+
+        # STICKY
+        "position": "sticky",
+        "top": "130px",
+        "z-index": "9999"
     },
     sizing_mode="stretch_width",
     height=65
@@ -612,7 +617,11 @@ header_banner = Div(text=f"""
         </div>
     </div>
 </div>
-""", sizing_mode="stretch_width", height=120)
+""", sizing_mode="stretch_width", height=120, styles={
+        "position": "sticky",
+        "top": "0px",
+        "z-index": "9999"
+    })
 
 # ==================================
 # NEW INSIGHT BOXES (GENRE & RATING) - CLEAN VERSION
@@ -1120,6 +1129,7 @@ map_text_inline = Div(
     """,
     width=180, height=320
 )
+
 
 # ==================================
 # DASHBOARD GRID LAYOUT CONTEXT (PROPER FLEX SPLIT)

@@ -3,8 +3,12 @@ from bokeh.plotting import figure
 from bokeh.io import output_file, save, curdoc
 from bokeh.layouts import column, row, Spacer
 from bokeh.models import Div, ColumnDataSource, HoverTool, Select, BoxAnnotation, LabelSet, Label
-from bokeh.models import CustomJS
+from bokeh.models import CustomJS, GeoJSONDataSource
+from bokeh.transform import cumsum
 import numpy as np
+import geopandas as gpd
+import json
+from math import pi
 
 # ==================================
 # LOAD & PREPROCESSING DATA
@@ -41,6 +45,81 @@ total_titles = len(df)
 movies = len(df[df['type'] == 'Movie'])
 tvshows = len(df[df['type'] == 'TV Show'])
 countries = df['country'].nunique()
+
+# ==================================
+# GAYA VISUALISASI KARTU CHART
+# ==================================
+CHART_CARD_STYLE = {
+    "border": "1px solid #EAEAEA",
+    "border-radius": "14px",
+    "padding": "15px",
+    "background": "#FFFFFF",
+    "box-shadow": "0 2px 10px rgba(0,0,0,0.04)"
+}
+
+# ---------------------------------------------------------------
+# COLOR PALETTE (mengikuti poster)
+# ---------------------------------------------------------------
+RED        = "#E50914"   # Movie
+RED_DARK   = "#B0060F"
+BLACK      = "#221F1F"   # TV Show
+GREY       = "#B3B3B3"
+PINK_BOX   = "#FBE0E0"   # kotak insight
+BG         = "#FFFFFF"
+PANEL_BG   = "#FAF4F4"
+TEXT_DARK  = "#141414"
+CARD_BORDER = "#E5DCDC"  # border tipis untuk semua card/panel
+
+CARD_PAD = 14
+
+def panel_title(title, subtitle):
+    return Div(text=f"""
+    <div style="font-family:Arial, sans-serif; padding:0 0 6px 0;">
+      <div style="font-size:15px; font-weight:900; color:{TEXT_DARK};">{title}</div>
+      <div style="font-size:11px; color:#555;">{subtitle}</div>
+    </div>
+    """, width=480, height=40)
+
+
+def caption_box(text, height=80):
+    return Div(
+        text=f"""
+        <div style="
+            background:{PINK_BOX};
+            border-radius:8px;
+            padding:10px 14px;
+            margin-top:8px;
+            font-family:Arial, sans-serif;
+            font-size:11px;
+            color:{TEXT_DARK};
+            height:{height - 28}px;
+            box-sizing:border-box;
+            display:flex;
+            align-items:center;
+            width:100%;
+        ">
+            <div>{text}</div>
+        </div>
+        """,
+        height=height,
+        sizing_mode="stretch_width"
+    )
+
+def card(content, width, height):
+    """Bungkus panel dengan border tipis + padding seragam supaya semua
+    section terlihat seperti grid/card yang presisi. Padding bawah dibuat
+    sedikit lebih besar agar konten (terutama caption) tidak mepet ke tepi."""
+    return column(
+        content,
+        width=width, height=height,
+        styles={
+            "border": f"1px solid {CARD_BORDER}",
+            "border-radius": "10px",
+            "padding": f"{CARD_PAD}px {CARD_PAD}px {CARD_PAD + 8}px {CARD_PAD}px",
+            "box-sizing": "border-box",
+            "background": BG,
+        }
+    )
 
 # ==================================
 # FILTER PANEL (STREAMLINED MINIMALIST)
@@ -113,7 +192,6 @@ movie_source = ColumnDataSource(movie_only)
 tv_source = ColumnDataSource(tv_only)
 
 growth_chart = figure(
-    title="Growth of Netflix Content Over Time",
     height=320,
     tools="pan,wheel_zoom,box_zoom,reset,save"
 )
@@ -150,68 +228,170 @@ growth_label = Label(
     border_line_color=None,
     padding=10
 )
+
+growth_chart.grid.grid_line_alpha = 0.0
+growth_chart.outline_line_color = None
+growth_chart.ygrid.grid_line_color = None
+growth_chart.xgrid.grid_line_color = None
+
 growth_chart.add_layout(growth_label)
 
-# ==================================
-# TOP COUNTRIES BUBBLE CHART
-# ==================================
+# =================================================================
+# 2. WHERE NETFLIX CONTENT COMES FROM (bubble map ala referensi)
+#    -> View di-crop ke kawasan negara top 5 (Amerika Utara, Eropa,
+#       India) supaya tidak banyak area laut/benua kosong.
+#    -> Posisi bubble & label diatur manual (CENTERS / LABEL_POS) +
+#       leader line tipis, supaya bubble yang berdekatan (US-Canada,
+#       UK-France) tidak saling tumpang tindih -- mengikuti gaya
+#       bubble map pada notebook PROGRAM (cell 5.2).
+#    -> Tools pan / wheel_zoom tetap aktif kalau user ingin zoom
+#       manual lebih lanjut, hanya VIEW AWALnya yang di-crop rapi.
+#    Ikut filter global: ukuran bubble & angka di dalamnya dihitung
+#    ulang sesuai subset data; posisi & nama negara tetap.
+# =================================================================
+def country_counts_for(subset):
+    # df sudah di-explode per country pada tahap preprocessing,
+    # jadi tinggal value_counts langsung (sama seperti notebook).
+    return subset['country'].value_counts()
 
-country_count = df['country'].value_counts().reset_index()
-country_count.columns = ['country', 'count']
-country_count = country_count.head(5)
+TOP5_COUNTRIES_ALL = country_counts_for(df).head(5).index.tolist()
 
-country_coords = {
-    'United States': (-98, 39), 'India': (78, 22), 'United Kingdom': (-2, 54),
-    'Canada': (-106, 56), 'France': (2, 46), 'Japan': (138, 36),
-    'Spain': (-4, 40), 'South Korea': (128, 36), 'Germany': (10, 51), 'Mexico': (-102, 23)
+# Posisi bubble (lon, lat) -- digeser sedikit dari koordinat geografis
+# asli (Canada ditarik ke atas US, UK & France direnggangkan) supaya
+# tidak saling tumpang tindih saat ukurannya membesar.
+CENTERS = {
+    "United States": (-98, 38),
+    "Canada": (-98, 63),
+    "United Kingdom": (-15, 58),
+    "France": (8, 48),
+    "India": (80, 21),
+}
+# Posisi label nama negara (callout), dihubungkan garis tipis ke bubble
+# -- supaya nama yang berdekatan tidak numpuk, mengikuti referensi.
+LABEL_POS = {
+    "United States": (-127, 10),
+    "Canada": (-98, 73),
+    "United Kingdom": (-6, 73),
+    "France": (24, 54),
+    "India": (80, 9),
 }
 
-country_count['lon'] = country_count['country'].map(lambda x: country_coords[x][0])
-country_count['lat'] = country_count['country'].map(lambda x: country_coords[x][1])
+def map_values(subset):
+    cc = country_counts_for(subset)
+    return [int(cc.get(c, 0)) for c in TOP5_COUNTRIES_ALL]
 
-max_count = country_count['count'].max()
-country_count['size'] = 30 + np.sqrt(country_count['count'] / max_count) * 100
-country_count['count_label'] = country_count['count'].apply(lambda x: f"{x:,}")
+map_all_vals = map_values(df)
+map_movie_vals = map_values(df[df['type'] == 'Movie'])
+map_tv_vals = map_values(df[df['type'] == 'TV Show'])
 
-country_all_source = ColumnDataSource(country_count)
-country_movie_source = ColumnDataSource(country_count.copy())
-country_tv_source = ColumnDataSource(country_count.copy())
-country_source = ColumnDataSource(country_count)
+def bubble_sizes(vals):
+    """Skala akar (sqrt), bukan liWHERE NETFLIX CONTENT COMES FROM
+near -- supaya selisih ukuran bubble
+    antar negara tidak terlalu ekstrem dan tidak mudah saling menutupi."""
+    m = max(vals) if max(vals) > 0 else 1
+    return [22 + (v / m) ** 0.5 * 48 for v in vals]
 
+map_lons = [CENTERS[c][0] for c in TOP5_COUNTRIES_ALL]
+map_lats = [CENTERS[c][1] for c in TOP5_COUNTRIES_ALL]
+label_lons = [LABEL_POS[c][0] for c in TOP5_COUNTRIES_ALL]
+label_lats = [LABEL_POS[c][1] for c in TOP5_COUNTRIES_ALL]
+
+# ---- Load world boundaries (Natural Earth via geopandas) ----
+def load_world():
+    try:
+        return gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+    except Exception:
+        url = ("https://raw.githubusercontent.com/nvkelso/natural-earth-vector/"
+               "master/geojson/ne_110m_admin_0_countries.geojson")
+        world = gpd.read_file(url)
+        name_col = 'NAME' if 'NAME' in world.columns else 'name'
+        world = world.rename(columns={name_col: 'name'})
+        return world[['name', 'geometry']]
+
+world = load_world()
+name_col = 'name' if 'name' in world.columns else world.columns[0]
+world = world[world[name_col] != 'Antarctica']
+world_geojson = json.dumps(json.loads(world.to_json()))
+geo_src = GeoJSONDataSource(geojson=world_geojson)
+
+# View AWAL di-crop ke kawasan top 5 negara (bukan world map penuh),
+# supaya tidak banyak ruang laut/benua kosong seperti referensi.
 country_map = figure(
-    title="Where Netflix Content Comes From",
-    height=320,
-    x_range=(-140, 110),
-    y_range=(0, 80),
-    tools="pan,wheel_zoom,box_zoom,reset,save"
-)
+            height=320,
+            x_range=(-140, 110),
+            y_range=(0, 80),
+            tools="pan,wheel_zoom,reset,save", toolbar_location="above",
+            background_fill_color="#F2EDED", border_fill_color="#FFFFFF"
+            )
 
-pink_overlay = BoxAnnotation(fill_color="#FCEAEA", fill_alpha=0.35)
-country_map.add_layout(pink_overlay)
+country_map.axis.visible = False
+country_map.grid.visible = False
+country_map.outline_line_color = None
 
-country_map.circle(
-    x='lon', y='lat', size='size', source=country_source,
-    fill_color="#E50914", fill_alpha=0.65, line_color="white", line_width=3
-)
+country_map.patches('xs', 'ys', source=geo_src, fill_color="#E5E0E0",
+           line_color="#FFFFFF", line_width=0.6, fill_alpha=1)
 
-country_labels = LabelSet(
-    x='lon', y='lat', text='country', source=country_source,
-    y_offset=15, text_font_size="9pt", text_font_style="bold"
-)
+map_src = ColumnDataSource(data=dict(
+    country=TOP5_COUNTRIES_ALL,
+    lon=map_lons, lat=map_lats,
+    n=map_all_vals,
+    size=bubble_sizes(map_all_vals),
+    label=[f"{v:,}" for v in map_all_vals],
+))
 
-bubble_labels = LabelSet(
-    x='lon', y='lat', text='count_label', source=country_source,
-    text_color='white', text_font_style='bold', text_align='center'
-)
+# Ripple ring (efek "echo" transparan di sekitar bubble utama),
+# mengikuti gaya referensi -- ukurannya statis (tidak ikut filter).
+for scale, alpha in [(2.2, 0.05), (1.6, 0.09)]:
+    ring_src = ColumnDataSource(data=dict(
+        lon=map_lons, lat=map_lats,
+        size=[s * scale for s in bubble_sizes(map_all_vals)]
+    ))
+    country_map.scatter('lon', 'lat', size='size', source=ring_src, color=RED,
+               alpha=alpha, line_color=None, marker="circle")
 
-country_map.add_layout(bubble_labels)
-country_map.add_layout(country_labels)
-country_map.add_tools(HoverTool(tooltips=[("Country", "@country"), ("Titles", "@count")]))
 
-country_map.background_fill_color = "#F8F3F3"
-country_map.border_fill_color = "#F8F3F3"
-country_map.xaxis.visible = False
-country_map.yaxis.visible = False
+
+# Garis penghubung tipis (leader line) dari bubble ke posisi label --
+# supaya nama negara yang berdekatan (UK & France, US yang besar)
+# tidak saling menumpuk dengan bubble atau dengan label lain.
+for c in TOP5_COUNTRIES_ALL:
+    cx, cy = CENTERS[c]
+    lx, ly = LABEL_POS[c]
+    if (cx, cy) != (lx, ly):
+        country_map.line([cx, lx], [cy, ly], line_color="#999999", line_width=1.1)
+        country_map.scatter([lx], [ly], size=4, color="#999999", line_color=None)
+
+bubbles = country_map.scatter('lon', 'lat', size='size', source=map_src, color=RED, alpha=0.88,
+                      line_color="white", line_width=1.5,
+                      hover_color=RED_DARK, hover_alpha=1)
+
+country_map.add_tools(HoverTool(renderers=[bubbles], tooltips=[
+    ("Country", "@country"),
+    ("Number of titles", "@n{0,0}")
+]))
+
+
+country_map.legend.location = "top_left"
+country_map.legend.orientation = "horizontal"
+country_map.add_tools(HoverTool(renderers=[bubbles], attachment="right", tooltips=[
+    ("Country", "@country"),
+    ("Number of titles", "@n{0,0}")
+]))
+
+
+# Angka jumlah judul di dalam bubble -- terikat ColumnDataSource
+# supaya ikut ter-update saat filter Movie/TV Show diganti.
+country_map.text('lon', 'lat', text='label', source=map_src, text_align="center",
+        text_baseline="middle", text_color="white",
+        text_font_size="10px", text_font_style="bold")
+
+# Nama negara di posisi label (callout), statis -- tidak ikut filter.
+label_src = ColumnDataSource(data=dict(
+    lon=label_lons, lat=label_lats, country=TOP5_COUNTRIES_ALL
+))
+country_map.text('lon', 'lat', text='country', source=label_src, text_align="center",
+        text_baseline="middle", text_color=TEXT_DARK, text_font_size="9.5px",
+        text_font_style="bold")
 
 # ==================================
 # TOP 10 GENRES CHART
@@ -246,12 +426,28 @@ genre_tv_source = ColumnDataSource(genre_tv_df)
 
 genre_chart = figure(
     y_range=list(reversed(genre_all_df['genre'])),
-    title="Top 10 Genres",
     height=320,
     tools="pan,wheel_zoom,reset,save"
 )
 
+genre_chart.grid.grid_line_alpha = 0.0
+genre_chart.outline_line_color = None
+genre_chart.ygrid.grid_line_color = None
+genre_chart.xgrid.grid_line_color = None
+
 genre_chart.hbar(y='genre', right='count', height=0.6, source=genre_source, fill_color='color', line_color='color')
+genre_labels = LabelSet(
+    x='count',
+    y='genre',
+    text='count',
+    source=genre_source,
+    x_offset=5,
+    text_font_size="9pt"
+)
+
+genre_chart.add_layout(genre_labels)
+genre_chart.x_range.end = 4000
+
 genre_chart.add_tools(HoverTool(tooltips=[("Genre", "@genre"), ("Titles", "@count")]))
 
 # ==================================
@@ -286,7 +482,6 @@ rating_source = ColumnDataSource(rating_all_df)
 
 rating_chart = figure(
     y_range=rating_order[::-1],
-    title="Audience Rating Profile",
     height=320,
     toolbar_location=None
 )
@@ -333,14 +528,31 @@ duration_movie_source = ColumnDataSource(duration_movie_df)
 duration_tv_source = ColumnDataSource(duration_tv_df)
 
 duration_chart = figure(
-    title="Duration Distribution",
     height=320,
     x_range=list(duration_all_df['bucket']),
     tools="pan,wheel_zoom,reset,save"
 )
 
 duration_chart.vbar(x='bucket', top='count', width=0.7, source=duration_source, color="#E50914")
+
+duration_labels = LabelSet(
+    x='bucket',
+    y='count',
+    text='count',
+    source=duration_source,
+    y_offset=5,
+    text_align="center",
+    text_font_size="9pt"
+)
+
+duration_chart.add_layout(duration_labels)
+
 duration_chart.add_tools(HoverTool(tooltips=[("Duration", "@bucket"), ("Titles", "@count")]))
+
+duration_chart.grid.grid_line_alpha = 0.0
+duration_chart.outline_line_color = None
+duration_chart.ygrid.grid_line_color = None
+duration_chart.xgrid.grid_line_color = None
 
 duration_chart.xaxis.major_label_text_font_size = "9pt"
 duration_chart.yaxis.major_label_text_font_size = "9pt"
@@ -447,6 +659,202 @@ duration_insight = Div(
     """, sizing_mode="stretch_width"
 )
 
+# =================================================================
+# 7. CONTENT TYPE BY MAJOR MARKETS (donut charts) + HOVER
+#    Catatan: donut ini SECARA DEFINISI menunjukkan proporsi Movie vs TV Show,
+#    jadi tidak relevan untuk ikut difilter oleh dropdown Movie/TV Show
+#    (kalau difilter ke "Movie" misalnya, semua donut otomatis 100% Movie).
+#    Sesuai instruksi, efek filter "diperluas ke semua chart termasuk
+#    Growth & Duration" -- panel ini tetap menampilkan komposisi penuh
+#    sebagai konteks pembanding pasar, dan diberi catatan kecil di caption.
+# =================================================================
+# Ukuran figure donut dibuat sedikit lebih kecil dari lebar kolomnya (DONUT_W)
+# agar ada sedikit ruang visual, tapi tetap presisi di dalam grid 6 kolom.
+DONUT_FIG_W = 190
+DONUT_GAP = 15
+
+def donut(country_name):
+    sub = df[df['country'] == country_name]
+    m = (sub['type'] == 'Movie').sum()
+    t = (sub['type'] == 'TV Show').sum()
+    tot = m + t
+    mp, tp = (m / tot * 100, t / tot * 100) if tot else (0, 0)
+    data = pd.DataFrame({'type': ['Movie', 'TV Show'], 'value': [m, t]})
+    data['angle'] = data['value'] / data['value'].sum() * 2 * pi
+    data['color'] = [RED, BLACK]
+    data['pct'] = [mp, tp]
+    src = ColumnDataSource(data)
+
+    p = figure(width=DONUT_FIG_W, height=DONUT_FIG_W, toolbar_location=None, tools="",
+               x_range=(-1.3, 1.3), y_range=(-1.3, 1.3), background_fill_color=BG,
+               border_fill_color=BG)
+    wedges = p.annular_wedge(x=0, y=0, inner_radius=0.55, outer_radius=0.95,
+                              start_angle=cumsum('angle', include_zero=True), end_angle=cumsum('angle'),
+                              line_color=BG, fill_color='color', source=src,
+                              hover_fill_alpha=0.7)
+    p.add_tools(HoverTool(renderers=[wedges],
+                           tooltips=[("Type", "@type"), ("Count", "@value{0,0}"), ("Percentage", "@pct{0.1f}%")]))
+    p.axis.visible = False
+    p.grid.visible = False
+    p.outline_line_color = None
+    pct_label = Label(
+    x=0,
+    y=0.05,
+    text=f"{mp:.1f}%",
+    text_align="center",
+    text_baseline="middle",
+    text_font_size="15px",
+    text_font_style="bold",
+    text_color=RED
+    )
+
+    type_label = Label(
+        x=0,
+        y=-0.2,
+        text="Movie",
+        text_align="center",
+        text_baseline="middle",
+        text_font_size="10px",
+        text_color=RED
+    )
+
+    p.add_layout(pct_label)
+    p.add_layout(type_label)
+
+    return p, mp, tp, pct_label, type_label
+
+p7a, mp_us, tp_us, pct_us, type_us = donut("United States")
+p7b, mp_in, tp_in, pct_in, type_in = donut("India")
+p7c, mp_kr, tp_kr, pct_kr, type_kr = donut("South Korea")
+p7d, mp_uk, tp_uk, pct_uk, type_uk = donut("United Kingdom")
+p7e, mp_ca, tp_ca, pct_ca, type_ca = donut("Canada")
+p7f, mp_jp, tp_jp, pct_jp, type_jp = donut("Japan")
+
+def market_card_content(p, name, tp, insight):
+
+    title_div = Div(
+        text=f"""
+        <div style="
+        width:{DONUT_FIG_W}px;
+        margin:0 auto;
+        text-align:center;
+        font-weight:bold;
+        font-size:12px;
+        color:{TEXT_DARK};
+        ">
+        {name}<br>
+        <span style="font-weight:normal;color:#555;">
+        TV Show {tp:.1f}%
+        </span>
+        </div>
+        """,
+        align="center",
+        sizing_mode="stretch_width"
+    )
+
+    insight_div = Div(
+        text=f"""
+        <div style="
+        width:{DONUT_FIG_W}px;
+        margin:0 auto;
+
+        background:{PINK_BOX};
+        border-radius:8px;
+        padding:8px;
+
+        text-align:center;
+        font-size:11px;
+        line-height:1.3;
+        min-height:42px;
+        box-sizing:border-box;
+        height:60px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        ">
+        {insight}
+        </div>
+        """,
+        align="center",
+        sizing_mode="stretch_width"
+    )
+
+    card = column(
+        title_div,
+        p,
+        insight_div,
+        spacing=5,
+        sizing_mode="stretch_width",
+        align="center"
+    )
+
+    return card, title_div
+
+
+card_us, title_us = market_card_content(
+    p7a,
+    "United States",
+    tp_us,
+    "🇺🇸 Balanced mix<br>Movies & TV Shows"
+)
+
+card_in, title_in = market_card_content(
+    p7b,
+    "India",
+    tp_in,
+    "🇮🇳 Strongest movie-oriented market"
+)
+
+card_kr, title_kr = market_card_content(
+    p7c,
+    "South Korea",
+    tp_kr,
+    "🇰🇷 74% TV Show → Strongest TV preference"
+)
+
+card_uk, title_uk = market_card_content(
+    p7d,
+    "United Kingdom",
+    tp_uk,
+    "🇬🇧 Balanced composition→Still slightly movie-led"
+)
+
+card_ca, title_ca = market_card_content(
+    p7e,
+    "Canada",
+    tp_ca,
+    "🇨🇦 72% Movie share→Clearly movie-dominant"
+)
+
+card_jp, title_jp = market_card_content(
+    p7f,
+    "Japan",
+    tp_jp,
+    "🇯🇵 TV-oriented market→Strong serialized content"
+)
+
+market_inner_row = row(
+    card_us,
+    card_in,
+    card_kr,
+    card_uk,
+    card_ca,
+    card_jp,
+    sizing_mode="stretch_width"
+)
+
+
+market = column(
+    panel_title(
+        "CONTENT TYPE BY MAJOR MARKETS",
+        "Movie vs TV Show share across the 6 biggest content-producing countries"
+    ),
+    market_inner_row,
+    sizing_mode="stretch_width"
+)
+
+panel7 = column(market, sizing_mode="stretch_width", styles=CHART_CARD_STYLE)
+
 # ==================================
 # INTERACTIVE JAVASCRIPT CALLBACK
 # ==================================
@@ -455,14 +863,19 @@ callback = CustomJS(
         source=source, all_source=all_source, movie_source=movie_source, tv_source=tv_source,
         genre_source=genre_source, genre_all_source=genre_all_source, genre_movie_source=genre_movie_source, genre_tv_source=genre_tv_source,
         rating_source=rating_source, rating_all_source=rating_all_source, rating_movie_source=rating_movie_source, rating_tv_source=rating_tv_source,
-        country_source=country_source, country_all_source=country_all_source, country_movie_source=country_movie_source, country_tv_source=country_tv_source,
         duration_source=duration_source, duration_all_source=duration_all_source, duration_movie_source=duration_movie_source, duration_tv_source=duration_tv_source,
         duration_chart=duration_chart, duration_insight=duration_insight, 
         genre_chart=genre_chart, genre_insight=genre_insight,
-        rating_chart=rating_chart, rating_insight=rating_insight
+        rating_chart=rating_chart, rating_insight=rating_insight,
+        map_src=map_src, map_all=map_all_vals,map_movie=map_movie_vals, map_tv=map_tv_vals,
+        title_us=title_us, title_in=title_in, title_kr=title_kr, title_uk=title_uk, title_ca=title_ca, title_jp=title_jp,
+        mp_us=mp_us,tp_us=tp_us, mp_in=mp_in, tp_in=tp_in, mp_kr=mp_kr, tp_kr=tp_kr, mp_uk=mp_uk, tp_uk=tp_uk, mp_ca=mp_ca,tp_ca=tp_ca, mp_jp=mp_jp,tp_jp=tp_jp,
+        pct_us=pct_us,type_us=type_us, pct_in=pct_in, type_in=type_in, pct_kr=pct_kr, type_kr=type_kr,
+        pct_uk=pct_uk, type_uk=type_uk, pct_ca=pct_ca, type_ca=type_ca, pct_jp=pct_jp, type_jp=type_jp,
     ),
     code="""
     let selected = cb_obj.value;
+    let mvals;
 
     // Fungsi helper untuk template box minimalis (Tanpa Judul)
     function getBox(icon, text) {
@@ -474,11 +887,30 @@ callback = CustomJS(
     </div>`;
     }
 
+    function setDonutTitle(div, country, label, pct){
+        div.text = `
+        <div style="
+            width:190px;
+            margin:0 auto;
+            text-align:center;
+            font-weight:bold;
+            font-size:12px;
+            color:#333;
+        ">
+            ${country}<br>
+            <span style="font-weight:normal;color:#555;">
+                ${label} ${pct.toFixed(1)}%
+            </span>
+        </div>`;
+    } 
+
+
     if(selected==="All"){
         source.data = {...all_source.data};
         genre_source.data = {...genre_all_source.data};
         rating_source.data = {...rating_all_source.data};
         duration_source.data = {...duration_all_source.data};
+        mvals = map_all;
         
         duration_chart.x_range.factors = ['<60', '60-90', '90-120', '120-150', '150-180', '>180'];
         genre_chart.y_range.factors = Array.from(genre_all_source.data['genre']).reverse();
@@ -487,12 +919,33 @@ callback = CustomJS(
         genre_insight.text = getBox("⭕", "International Movies and Dramas lead the overall Netflix library, showcasing a strong global narrative focus.");
         rating_insight.text = getBox("⚖️", "The platform is dominated by mature content, with TV-MA being the most frequent rating across all categories.");
         duration_insight.text = getBox("⏱️", "Most content length varies based on type, with movies clustering in standard feature lengths and TV shows focusing on varied season counts.");
-    
+
+        setDonutTitle(title_us,"United States","TV Show",tp_us);
+        setDonutTitle(title_in,"India","TV Show",tp_in);
+        setDonutTitle(title_kr,"South Korea","TV Show",tp_kr);
+        setDonutTitle(title_uk,"United Kingdom","TV Show",tp_uk);
+        setDonutTitle(title_ca,"Canada","TV Show",tp_ca);
+        setDonutTitle(title_jp,"Japan","TV Show",tp_jp);
+
+        pct_us.text = `${mp_us.toFixed(1)}%`;
+        type_us.text = "Movie";
+        pct_in.text = `${mp_in.toFixed(1)}%`;
+        type_in.text = "Movie";
+        pct_kr.text = `${mp_kr.toFixed(1)}%`;
+        type_kr.text = "Movie";
+        pct_uk.text = `${mp_uk.toFixed(1)}%`;
+        type_uk.text = "Movie";
+        pct_ca.text = `${mp_ca.toFixed(1)}%`;
+        type_ca.text = "Movie";
+        pct_jp.text = `${mp_jp.toFixed(1)}%`;
+        type_jp.text = "Movie";
+
     } else if(selected==="Movie"){
         source.data = {...movie_source.data};
         genre_source.data = {...genre_movie_source.data};
         rating_source.data = {...rating_movie_source.data};
         duration_source.data = {...duration_movie_source.data};
+        mvals = map_movie;
         
         duration_chart.x_range.factors = ['<60', '60-90', '90-120', '120-150', '150-180', '>180'];
         genre_chart.y_range.factors = Array.from(genre_movie_source.data['genre']).reverse();
@@ -502,11 +955,32 @@ callback = CustomJS(
         rating_insight.text = getBox("⚖️", "Movies show a strong concentration in TV-MA ratings, followed by a significant volume of TV-14 content.");
         duration_insight.text = getBox("⏱️", "The runtime distribution reveals a strong concentration around the 90-120 minute mark, the standard sweet-spot for global feature films.");
 
+        setDonutTitle(title_us,"United States","TV Show",tp_us);
+        setDonutTitle(title_in,"India","TV Show",tp_in);
+        setDonutTitle(title_kr,"South Korea","TV Show",tp_kr);
+        setDonutTitle(title_uk,"United Kingdom","TV Show",tp_uk);
+        setDonutTitle(title_ca,"Canada","TV Show",tp_ca);
+        setDonutTitle(title_jp,"Japan","TV Show",tp_jp);
+
+        pct_us.text = `${mp_us.toFixed(1)}%`;
+        type_us.text = "Movie";
+        pct_in.text = `${mp_in.toFixed(1)}%`;
+        type_in.text = "Movie";
+        pct_kr.text = `${mp_kr.toFixed(1)}%`;
+        type_kr.text = "Movie";
+        pct_uk.text = `${mp_uk.toFixed(1)}%`;
+        type_uk.text = "Movie";
+        pct_ca.text = `${mp_ca.toFixed(1)}%`;
+        type_ca.text = "Movie";
+        pct_jp.text = `${mp_jp.toFixed(1)}%`;
+        type_jp.text = "Movie";
+
     } else {
         source.data = {...tv_source.data};
         genre_source.data = {...genre_tv_source.data};
         rating_source.data = {...rating_tv_source.data};
         duration_source.data = {...duration_tv_source.data};
+        mvals = map_tv;
         
         duration_chart.x_range.factors = ["1 Season", "2 Season", "3 Season", "4 Season", "5+ Seasons"];
         genre_chart.y_range.factors = Array.from(genre_tv_source.data['genre']).reverse(); 
@@ -515,7 +989,42 @@ callback = CustomJS(
         genre_insight.text = getBox("⭕", "International TV Shows significantly outperform other genres, showcasing the massive global appeal of localized television content.");
         rating_insight.text = getBox("⚖️", "For TV series, TV-MA is the dominant rating, reflecting a clear strategy to prioritize mature, high-engagement series.");
         duration_insight.text = getBox("⏱️", "An overwhelming majority of TV shows stop precisely after 1 Season. Only top-performing flagship franchises reach the 5+ Seasons tier.");
+
+        setDonutTitle(title_us,"United States","Movie",mp_us);
+        setDonutTitle(title_in,"India","Movie",mp_in);
+        setDonutTitle(title_kr,"South Korea","Movie",mp_kr);
+        setDonutTitle(title_uk,"United Kingdom","Movie",mp_uk);
+        setDonutTitle(title_ca,"Canada","Movie",mp_ca);
+        setDonutTitle(title_jp,"Japan","Movie",mp_jp);
+        
+        pct_us.text = `${tp_us.toFixed(1)}%`;
+        type_us.text = "TV Show";
+        pct_in.text = `${tp_in.toFixed(1)}%`;
+        type_in.text = "TV Show";
+        pct_kr.text = `${tp_kr.toFixed(1)}%`;
+        type_kr.text = "TV Show";
+        pct_uk.text = `${tp_uk.toFixed(1)}%`;
+        type_uk.text = "TV Show";
+        pct_ca.text = `${tp_ca.toFixed(1)}%`;
+        type_ca.text = "TV Show";
+        pct_jp.text = `${tp_jp.toFixed(1)}%`;
+        type_jp.text = "TV Show";
     }
+
+    const mmax = Math.max(...mvals,1);
+    const sizes = mvals.map(
+        v => 22 + Math.sqrt(v/mmax)*48
+    );
+
+    map_src.data = {
+        country: map_src.data.country,
+        lon: map_src.data.lon,
+        lat: map_src.data.lat,
+        n: mvals,
+        size: sizes,
+        label: mvals.map(v => v.toLocaleString())
+    };
+
 
     // Emit Perubahan
     genre_insight.change.emit();
@@ -528,7 +1037,11 @@ callback = CustomJS(
     duration_chart.x_range.change.emit();
     genre_chart.y_range.change.emit();
     rating_chart.y_range.change.emit();
-    growth_label.change.emit();
+    map_src.change.emit();
+    title_us.properties.text.change.emit();
+    title_us.change.emit(); title_in.change.emit();title_kr.change.emit();title_uk.change.emit(); title_ca.change.emit();title_jp.change.emit();
+    pct_us.change.emit(); type_us.change.emit(); pct_in.change.emit(); type_in.change.emit(); pct_kr.change.emit();
+    type_kr.change.emit(); pct_uk.change.emit(); type_uk.change.emit(); pct_ca.change.emit(); type_ca.change.emit(); pct_jp.change.emit(); type_jp.change.emit();
     """
 )
 
@@ -551,16 +1064,6 @@ for chart in [growth_chart, country_map, genre_chart, rating_chart, duration_cha
     chart.ygrid.grid_line_color = None
     chart.grid.grid_line_alpha = 0.0
 
-# ==================================
-# GAYA VISUALISASI KARTU CHART
-# ==================================
-CHART_CARD_STYLE = {
-    "border": "1px solid #EAEAEA",
-    "border-radius": "14px",
-    "padding": "15px",
-    "background": "#FFFFFF",
-    "box-shadow": "0 2px 10px rgba(0,0,0,0.04)"
-}
 
 # ==================================
 # TEXT INSIGHT BOXES (ROW 1)
@@ -623,30 +1126,41 @@ map_text_inline = Div(
 # ==================================
 
 # KARTU 1: Growth Chart (Diberi flex agar mendominasi ruang) + Boks Pink (Diberi lebar kaku lebih ramping)
-growth_card_combined = row(
+growth_card_combined = column(
+
+    panel_title(
+        "NETFLIX CONTENT GROWTH OVER TIME",
+        "Number of titles added per year"
+    ),
+
     growth_chart,
-    styles={
-        **CHART_CARD_STYLE, 
-        "display": "flex !important", 
-        "flex-direction": "row !important", 
-        "align-items": "stretch !important"
-    }, 
+
+    styles=CHART_CARD_STYLE,
     css_classes=["growth-flex-card"],
-    sizing_mode="stretch_width"
+    sizing_mode="stretch_both"
 )
 
 # KARTU 2: Country Map (Diberi flex agar mendominasi ruang) + Boks Pink (Diberi lebar kaku lebih ramping)
-country_map_card_combined = row(
-    country_map, 
-    map_text_inline, 
+country_map_card_combined = column(
+
+    panel_title(
+        "WHERE NETFLIX CONTENT COMES FROM",
+        "Number of titles by country of production"
+    ),
+
+    row(
+        country_map,
+        map_text_inline,
+        sizing_mode="stretch_width"
+    ),
+
     styles={
-        **CHART_CARD_STYLE, 
-        "display": "flex !important", 
-        "flex-direction": "row !important", 
-        "align-items": "stretch !important"
-    }, 
-    css_classes=["map-flex-card"],
-    sizing_mode="stretch_width"
+        **CHART_CARD_STYLE,
+        "display": "flex !important",
+        "flex-direction": "column !important"
+    },
+
+    sizing_mode="stretch_both"
 )
 
 # BARIS 1 UTAMA
@@ -655,19 +1169,65 @@ chart_row1 = row(growth_card_combined, country_map_card_combined, spacing=20, si
 # KARTU 3 (DURATION)
 duration_card_combined = column(duration_chart, duration_insight, styles=CHART_CARD_STYLE, spacing=10, sizing_mode="stretch_width")
 
-# BARIS 2 UTAMA
+# BARIS 2
+genre_card = column(
+    panel_title(
+        "TOP 10 GENRES",
+        "Most frequent content categories"
+    ),
+    genre_chart,
+    genre_insight,
+    styles=CHART_CARD_STYLE,
+    spacing=10,
+    sizing_mode="stretch_width"
+)
+
+rating_card = column(
+    panel_title(
+        "AUDIENCE RATING PROFILE",
+        "Distribution of content ratings"
+    ),
+    rating_chart,
+    rating_insight,
+    styles=CHART_CARD_STYLE,
+    spacing=10,
+    sizing_mode="stretch_width"
+)
+
+duration_card = column(
+    panel_title(
+        "DURATION DISTRIBUTION",
+        "Runtime and season count distribution"
+    ),
+    duration_chart,
+    duration_insight,
+    styles=CHART_CARD_STYLE,
+    spacing=10,
+    sizing_mode="stretch_width"
+)
+
+#baris 2 utama
 chart_row2 = row(
-    column(genre_chart, genre_insight, styles=CHART_CARD_STYLE, sizing_mode="stretch_width", spacing=10),
-    column(rating_chart, rating_insight, styles=CHART_CARD_STYLE, sizing_mode="stretch_width", spacing=10),
-    column(duration_chart, duration_insight, styles=CHART_CARD_STYLE, sizing_mode="stretch_width", spacing=10),
+    genre_card,
+    rating_card,
+    duration_card,
     spacing=20,
     sizing_mode="stretch_width"
 )
+
+# BARIS 3 UTAMA
+chart_row3 = row(
+    panel7,
+    spacing=20,
+    sizing_mode="stretch_width"
+)
+
 
 charts_layout = column(
     filter_panel,
     chart_row1,
     chart_row2,
+    chart_row3,
     spacing=20,
     sizing_mode="stretch_width"
 )
@@ -855,6 +1415,7 @@ responsive_css_injector = Div(
     """,
     visible=False
 )
+print(type(title_us))
 
 # ==================================
 # ASSEMBLY DOCUMENT PACKAGING

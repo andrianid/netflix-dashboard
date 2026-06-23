@@ -6,7 +6,7 @@ from bokeh.plotting import figure
 from bokeh.io import output_file, save, curdoc
 from bokeh.layouts import column, row, Spacer
 from bokeh.models import Div, ColumnDataSource, HoverTool, Select, BoxAnnotation, LabelSet, Label
-from bokeh.models import CustomJS, GeoJSONDataSource
+from bokeh.models import CustomJS, GeoJSONDataSource, TapTool, Circle
 from bokeh.transform import cumsum
 import numpy as np
 import geopandas as gpd
@@ -348,10 +348,17 @@ bubbles = country_map.scatter('lon', 'lat', size='size', source=map_src, color=R
                       line_color="white", line_width=1.5,
                       hover_color=RED_DARK, hover_alpha=1)
 
-country_map.add_tools(HoverTool(renderers=[bubbles], tooltips=[
-    ("Country", "@country"),
-    ("Number of titles", "@n{0,0}")
-]))
+bubbles.selection_glyph = bubbles.glyph.clone()
+bubbles.selection_glyph.fill_alpha = 1.0
+bubbles.selection_glyph.line_color = "gold"
+bubbles.selection_glyph.line_width = 4
+
+bubbles.nonselection_glyph = bubbles.glyph.clone()
+bubbles.nonselection_glyph.fill_alpha = 0.20
+
+tap = TapTool()
+country_map.add_tools(tap)
+country_map.toolbar.active_tap = tap
 
 
 country_map.legend.location = "top_left"
@@ -1395,8 +1402,23 @@ charts_layout.sizing_mode = "stretch_width"
 chart_row1.sizing_mode    = "stretch_width"
 chart_row2.sizing_mode    = "stretch_width"
 
-output_file("netflix_dashboard.html")
+output_file(
+    "netflix_dashboard.html",
+    title="CONTENT LANDSCAPE DASHBOARD"
+)
 curdoc().theme = None
 save(layout)
+
+with open("netflix_dashboard.html", "r", encoding="utf-8") as f:
+    html = f.read()
+
+favicon = '''
+<link rel="icon" href="https://www.netflix.com/favicon.ico" type="image/x-icon">
+'''
+
+html = html.replace("</head>", favicon + "\n</head>")
+
+with open("netflix_dashboard.html", "w", encoding="utf-8") as f:
+    f.write(html)
 
 print("Dashboard created successfully")
